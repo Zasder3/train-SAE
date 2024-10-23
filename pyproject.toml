@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "train-sae"
+version = "0.1.0"
+description = "Train Sparse Autoencoders (SAEs) using PyTorch."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+    { name = "Cade Gordon", email = "cadegord@berkeley.edu" }
+]
+dependencies = [
+    "torch>=2.0.0",
+    "transformers",
+    "jaxtyping",
+]
+
+[tool.setuptools]
+package-dir = {"train_sae" = "train-sae"}
+packages = ["train_sae"]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.7.0",
+    "pre-commit>=5.0.0",
+    "pytest>=8.0.0",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py39"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+    "N",   # pep8-naming
+    "SIM", # flake8-simplify
+    "TCH", # flake8-type-checking
+    "TID", # flake8-tidy-imports
+    "RUF", # ruff-specific rules
+]
+ignore = ["D100", "D104", "E721", "E731", "F722"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["train_sae"]
