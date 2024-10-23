@@ -28,7 +28,7 @@ class VanillaSAE(nn.Module):
         losses = {}
         losses["mse"] = ((decoded - x).pow(2) * mask) / mask.sum()
         losses["sparsity"] = (
-            encoded @ torch.norm(encoded, dim=0) / encoded.size(0) * self.sparsity
+            encoded * mask @ torch.norm(encoded, dim=0) / mask.sum() * self.sparsity
         )
         losses["total"] = sum(losses.values())
         return losses
