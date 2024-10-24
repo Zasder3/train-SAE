@@ -90,19 +90,21 @@ class TruncatedEsm2(nn.Module):
     @property
     def embed_dim(self) -> int:
         """Return the embedding dimension of the model."""
-        return self.embeddings.embedding_dim
+        return self.embeddings.word_embeddings.embedding_dim
 
     @classmethod
-    def from_pretrained(cls, model_name_or_path: str, n_layers: int, **kwargs):
+    def from_pretrained(
+        cls, pretrained_model_name_or_path: str, n_layers: int, **kwargs
+    ):
         """
         Create a truncated model from a pretrained ESM model.
 
         Args:
-            model_name_or_path (str): Name or path of pretrained model
+            pretrained_model_name_or_path (str): Name or path of pretrained model
             n_layers (int): Number of layers to keep
             **kwargs: Additional arguments to pass to from_pretrained
         """
         original_model = AutoModelForMaskedLM.from_pretrained(
-            model_name_or_path, **kwargs
+            pretrained_model_name_or_path, **kwargs
         ).esm
         return cls(original_model, n_layers)

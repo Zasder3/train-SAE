@@ -5,3 +5,6 @@ __pycache__/
 .ruff_cache/
 dist/
 *.egg-info/
+configs/private/
+wandb/
+.pytest_cache/

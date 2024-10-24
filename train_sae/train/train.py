@@ -1,9 +1,10 @@
 import torch
 import torch.nn as nn
-import wandb
 from jaxtyping import Float
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
+import wandb
 from train_sae.configs.base import RunConfig
 
 
@@ -12,46 +13,58 @@ def log_progress(
     encoded: Float[torch.Tensor, "b n s"],
     mask: Float[torch.Tensor, "b n"],
 ):
-    # log the losses to wandb
+    # Create a single dictionary for logging
+    log_dict = {}
+
+    # Add losses to the log dictionary
     for key, value in losses.items():
         if key == "total":
-            wandb.log({"loss": value})
+            log_dict["loss"] = value
         else:
-            wandb.log({f"loss/{key}": value})
+            log_dict[f"loss/{key}"] = value
 
-    # log the L0 norm of the encoded tensor
-    wandb.log({"L0_norm": (encoded > 0).sum() / mask.sum()})
+    # Add L0 norm to the log dictionary
+    log_dict["L0_norm"] = (encoded * mask[..., None] > 0).sum() / mask.sum()
+
+    # Log all metrics in a single call
+    wandb.log(log_dict)
 
 
 def train_sae(
-    encoding_model: nn.Module,
+    featurizing_model: nn.Module,
     sae_model: nn.Module,
     optimizer: torch.optim.Optimizer,
     dataloader: DataLoader,
     config: RunConfig,
 ):
     # set the models to training mode
-    encoding_model.eval()
+    featurizing_model.eval()
     sae_model.train()
 
+    # Convert models to bfloat16
+    featurizing_model = featurizing_model.to(torch.bfloat16)
+    sae_model = sae_model.to(torch.bfloat16)
+
     current_step = 0
+    progress_bar = tqdm(total=config.num_steps, desc="Training SAE")
     while current_step < config.num_steps:
         for batch in dataloader:
+            del batch["labels"]
             for key in batch:
                 batch[key] = batch[key].to(config.device)
 
             with torch.no_grad():
-                encoding = encoding_model(**batch)
+                features = featurizing_model(**batch).to(torch.bfloat16)
 
             # zero the gradients
             optimizer.zero_grad()
 
             # forward pass
-            decoded, encoded = sae_model(encoding.last_hidden_state)
+            encoded, decoded = sae_model(features)
 
             # calculate the loss
             losses = sae_model.get_losses(
-                encoding, encoded, decoded, batch["attention_mask"]
+                features, encoded, decoded, batch["attention_mask"]
             )
             losses["total"].backward()
 
@@ -59,3 +72,12 @@ def train_sae(
             optimizer.step()
 
             log_progress(losses, encoded, batch["attention_mask"])
+
+            current_step += 1
+            progress_bar.update(1)
+            progress_bar.set_postfix(losses)
+
+            if current_step >= config.num_steps:
+                break
+
+    progress_bar.close()

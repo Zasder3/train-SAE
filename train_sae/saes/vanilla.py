@@ -18,7 +18,7 @@ class VanillaSAE(nn.Module):
     ) -> tuple[Float[torch.Tensor, "b n d"], Float[torch.Tensor, "b n s"]]:
         encoded = self.encode(x)
         decoded = self.decoder(encoded)
-        return decoded, encoded
+        return encoded, decoded
 
     def get_losses(
         self,
@@ -27,10 +27,13 @@ class VanillaSAE(nn.Module):
         decoded: Float[torch.Tensor, "b n d"],
         mask: Bool[torch.Tensor, "b n"],
     ) -> dict[str, Float[torch.Tensor, "1"]]:
+        mask = mask.unsqueeze(-1)
         losses = {}
-        losses["mse"] = ((decoded - x).pow(2) * mask) / mask.sum()
+        losses["mse"] = ((decoded - x).pow(2) * mask).sum() / mask.sum()
         losses["sparsity"] = (
-            encoded * mask @ torch.norm(encoded, dim=0) / mask.sum() * self.sparsity
+            (encoded * mask @ torch.norm(self.decoder.weight, dim=0)).sum()
+            / mask.sum()
+            * self.sparsity
         )
         losses["total"] = sum(losses.values())
         return losses

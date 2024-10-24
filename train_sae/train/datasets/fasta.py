@@ -5,14 +5,14 @@ try:
 except ImportError:
     pyfastx = None
 from torch.utils.data import Dataset
-from transformers import PretrainedTokenizer
+from transformers import PreTrainedTokenizer
 
 
 class FastaDataset(Dataset):
     def __init__(
         self,
         path: str,
-        tokenizer: PretrainedTokenizer,
+        tokenizer: PreTrainedTokenizer,
         max_len: int = 1022,
         world_size: int = 1,
         rank: int = 0,
@@ -34,4 +34,4 @@ class FastaDataset(Dataset):
         if len(seq) > self.max_len:
             start = random.randint(0, len(seq) - self.max_len)
             seq = seq[start : start + self.max_len]
-        return self.tokenizer(seq, return_tensors="pt")
+        return self.tokenizer(seq)

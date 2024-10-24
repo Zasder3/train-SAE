@@ -3,6 +3,8 @@ import json
 
 from pydantic import BaseModel
 
+from train_sae.configs.base import RunConfig
+
 
 def config_to_argparser(config: BaseModel) -> argparse.Namespace:
     """Convert a Pydantic config to an argparse namespace."""
@@ -17,7 +19,7 @@ def config_to_argparser(config: BaseModel) -> argparse.Namespace:
     return parser
 
 
-def parse_config(config: BaseModel) -> BaseModel:
+def parse_config(config: RunConfig) -> RunConfig:
     """Load the configuration from the command line. Optionally load from a file and
     overridewith command line arguments."""
     parser = config_to_argparser(config)
