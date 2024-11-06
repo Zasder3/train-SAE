@@ -8,6 +8,10 @@ class VanillaSAE(nn.Module):
         super().__init__()
         self.encoder = nn.Linear(embed_dim, sparse_dim)
         self.decoder = nn.Linear(sparse_dim, embed_dim)
+        self.decoder.weight.data = self.encoder.weight.data.t().clone()
+        # set biases to zero
+        self.encoder.bias.data.zero_()
+        self.decoder.bias.data.zero_()
         self.sparsity = sparsity
 
     def encode(self, x: Float[torch.Tensor, "b n d"]) -> Float[torch.Tensor, "b n s"]:
