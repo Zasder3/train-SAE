@@ -1,5 +1,6 @@
 import logging
 
+import numpy as np
 import torch
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, DataCollatorForLanguageModeling
@@ -40,16 +41,37 @@ def main():
     )
 
     collator = DataCollatorForLanguageModeling(tokenizer, mlm=False)
-    dataset = FastaDataset(config.dataset_dir, tokenizer)
-    dataloader = DataLoader(
-        dataset,
+    test_set_generator = np.random.default_rng(42)
+    all_indices = np.arange(config.samples_in_dataset())
+    test_set_generator.shuffle(all_indices)
+    train_dataset = FastaDataset(
+        config.dataset_dir, tokenizer, indices=all_indices[: -config.num_test_samples]
+    )
+    test_dataset = FastaDataset(
+        config.dataset_dir, tokenizer, indices=all_indices[-config.num_test_samples :]
+    )
+    train_dataloader = DataLoader(
+        train_dataset,
         batch_size=config.batch_size,
         shuffle=True,
         collate_fn=collator,
     )
+    test_dataloader = DataLoader(
+        test_dataset,
+        batch_size=config.batch_size,
+        shuffle=False,
+        collate_fn=collator,
+    )
 
     # train the model
-    train_sae(featurizing_model, sae_model, optimizer, dataloader, config)
+    train_sae(
+        featurizing_model,
+        sae_model,
+        optimizer,
+        train_dataloader,
+        test_dataloader,
+        config,
+    )
 
 
 if __name__ == "__main__":

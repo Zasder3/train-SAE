@@ -5,8 +5,12 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class RunConfig(BaseModel):
-    # hyperparameters
+    # dataset features
     dataset_dir: str = Field(description="Path to the dataset directory.")
+    samples_in_dataset: int = Field(description="Number of samples in the dataset.")
+    num_test_samples: int = Field(description="Number of samples to use for testing.")
+
+    # hyperparameters
     num_steps: int = Field(description="Number of steps to train for.")
     batch_size: int = Field(description="Batch size.")
     lr: float = Field(description="Learning rate.")

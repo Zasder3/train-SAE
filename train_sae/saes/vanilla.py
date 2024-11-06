@@ -37,3 +37,7 @@ class VanillaSAE(nn.Module):
         )
         losses["total"] = sum(losses.values())
         return losses
+
+    @property
+    def get_flops(self) -> int:
+        return 6 * self.encoder.in_features * self.encoder.out_features
