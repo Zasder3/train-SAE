@@ -31,6 +31,11 @@ def log_progress(
     # Add L0 norm to the log dictionary
     log_dict["train/L0_norm"] = (encoded * mask[..., None] > 0).sum() / mask.sum()
 
+    # Add the dead neurons to the log dictionary
+    log_dict["train/dead_neurons"] = (
+        1 - (encoded * mask[..., None] > 0).any(dim=(0, 1)).float().mean()
+    )
+
     # Log all metrics in a single call
     wandb.log(log_dict)
 
@@ -84,7 +89,10 @@ def evaluate_sae(
         with torch.no_grad():
             features = featurizing_model(**batch).to(config.dtype)
             if config.normalize:
-                features /= features.norm(dim=-1, keepdim=True)
+                features *= features.shape[-1] ** 0.5 / features.norm(
+                    dim=-1, keepdim=True
+                )
+
             encoded, decoded = sae_model(features)
             neuron_is_alive |= (
                 encoded * batch["attention_mask"].unsqueeze(-1) > 0
@@ -151,7 +159,9 @@ def train_sae(
                 features = featurizing_model(**batch).to(config.dtype)
 
                 if config.normalize:
-                    features /= features.norm(dim=-1, keepdim=True)
+                    features *= features.shape[-1] ** 0.5 / features.norm(
+                        dim=-1, keepdim=True
+                    )
 
             # zero the gradients
             optimizer.zero_grad()

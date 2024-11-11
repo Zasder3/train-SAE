@@ -36,7 +36,7 @@ def main():
         featurizing_model.embed_dim, config.sparse_dim, config.sparsity
     ).to(config.device)
     tokenizer = AutoTokenizer.from_pretrained(config.featurizing_model_name)
-    optimizer = torch.optim.AdamW(
+    optimizer = torch.optim.Adam(
         sae_model.parameters(),
         lr=config.lr,
         betas=(config.beta1, config.beta2),
