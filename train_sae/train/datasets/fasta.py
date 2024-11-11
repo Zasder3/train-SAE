@@ -36,10 +36,12 @@ class FastaDataset(Dataset):
     def __len__(self):
         return len(self.indices) // self.world_size
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int, max_len: Optional[int] = None):
+        max_len = max_len or self.max_len
+
         idx = idx * self.world_size + self.rank
         seq = self.fasta[self.indices[idx]].seq
-        if len(seq) > self.max_len:
-            start = random.randint(0, len(seq) - self.max_len)
-            seq = seq[start : start + self.max_len]
+        if len(seq) > max_len:
+            start = random.randint(0, len(seq) - max_len)
+            seq = seq[start : start + max_len]
         return self.tokenizer(seq)

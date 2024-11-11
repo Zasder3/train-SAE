@@ -11,6 +11,7 @@ from train_sae.configs.utils import parse_config
 from train_sae.models.esm2 import TruncatedEsm2
 from train_sae.saes.vanilla import VanillaSAE
 from train_sae.train.datasets.fasta import FastaDataset
+from train_sae.train.scheduler import cosine_lr
 from train_sae.train.train import train_sae
 
 
@@ -38,11 +39,19 @@ def main():
     optimizer = torch.optim.AdamW(
         sae_model.parameters(),
         lr=config.lr,
+        betas=(config.beta1, config.beta2),
+        weight_decay=config.wd,
     )
+    if config.sparsity_warmup_steps > 0:
+        scheduler = cosine_lr(
+            optimizer, config.lr, config.warmup_steps, config.num_steps
+        )
+    else:
+        scheduler = lambda step: None  # lambda fn that does nothing
 
     collator = DataCollatorForLanguageModeling(tokenizer, mlm=False)
     test_set_generator = np.random.default_rng(42)
-    all_indices = np.arange(config.samples_in_dataset())
+    all_indices = np.arange(config.samples_in_dataset)
     test_set_generator.shuffle(all_indices)
     train_dataset = FastaDataset(
         config.dataset_dir, tokenizer, indices=all_indices[: -config.num_test_samples]
@@ -68,6 +77,7 @@ def main():
         featurizing_model,
         sae_model,
         optimizer,
+        scheduler,
         train_dataloader,
         test_dataloader,
         config,

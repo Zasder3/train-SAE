@@ -1,4 +1,5 @@
 import math
+import os
 
 import torch
 import torch.nn as nn
@@ -9,7 +10,7 @@ from tqdm import tqdm
 import wandb
 from train_sae.configs.base import RunConfig
 
-MIN_N_FLOPS_TO_SAVE = 1e17
+MIN_N_FLOPS_TO_SAVE = 1e15
 
 
 def log_progress(
@@ -23,12 +24,12 @@ def log_progress(
     # Add losses to the log dictionary
     for key, value in losses.items():
         if key == "total":
-            log_dict["loss"] = value
+            log_dict["train/loss"] = value
         else:
-            log_dict[f"loss/{key}"] = value
+            log_dict[f"train/loss/{key}"] = value
 
     # Add L0 norm to the log dictionary
-    log_dict["L0_norm"] = (encoded * mask[..., None] > 0).sum() / mask.sum()
+    log_dict["train/L0_norm"] = (encoded * mask[..., None] > 0).sum() / mask.sum()
 
     # Log all metrics in a single call
     wandb.log(log_dict)
@@ -61,14 +62,68 @@ def evaluate_sae(
     config: RunConfig,
 ):
     # Set the models to evaluation mode
+    sae_model.eval()
     featurizing_model.eval()
-    ...
+
+    # Initialize the loss accumulator
+    total_loss = 0
+    total_mse_loss = 0
+    total_sparsity_loss = 0
+    total_l0_norm = 0
+    total_batches = 0
+    neuron_is_alive = torch.zeros(
+        sae_model.encoder.out_features, dtype=torch.bool, device=config.device
+    )
+
+    # Iterate over the dataloader
+    for batch in dataloader:
+        del batch["labels"]
+        for key in batch:
+            batch[key] = batch[key].to(config.device)
+
+        with torch.no_grad():
+            features = featurizing_model(**batch).to(config.dtype)
+            if config.normalize:
+                features /= features.norm(dim=-1, keepdim=True)
+            encoded, decoded = sae_model(features)
+            neuron_is_alive |= (
+                encoded * batch["attention_mask"].unsqueeze(-1) > 0
+            ).any(dim=(0, 1))
+
+            losses = sae_model.get_losses(
+                features,
+                encoded,
+                decoded,
+                batch["attention_mask"],
+                config.warmup_steps,
+                config,
+            )
+
+            total_loss += losses["total"].item()
+            total_mse_loss += losses["mse"].item()
+            total_sparsity_loss += losses["sparsity"].item()
+            total_l0_norm += (
+                (encoded * batch["attention_mask"].unsqueeze(-1) > 0).sum().item()
+            ) / batch["attention_mask"].sum().item()
+            total_batches += 1
+
+    # Log the evaluation metrics
+    wandb.log(
+        {
+            "eval/loss": total_loss / total_batches,
+            "eval/loss/mse": total_mse_loss / total_batches,
+            "eval/loss/sparsity": total_sparsity_loss / total_batches,
+            "eval/L0_norm": total_l0_norm / total_batches,
+            "eval/dead_neurons": 1 - neuron_is_alive.float().mean(),
+        }
+    )
 
 
 def train_sae(
     featurizing_model: nn.Module,
     sae_model: nn.Module,
     optimizer: torch.optim.Optimizer,
+    scheduler: callable,
     train_dataloader: DataLoader,
     test_dataloader: DataLoader,
     config: RunConfig,
@@ -78,9 +133,9 @@ def train_sae(
     featurizing_model.eval()
     sae_model.train()
 
-    # Convert models to bfloat16
-    featurizing_model = featurizing_model.to(torch.bfloat16)
-    sae_model = sae_model.to(torch.bfloat16)
+    # Convert models to dtype
+    featurizing_model = featurizing_model.to(config.dtype)
+    sae_model = sae_model.to(config.dtype)
 
     current_step = 0
     progress_bar = tqdm(total=config.num_steps, desc="Training SAE")
@@ -90,8 +145,13 @@ def train_sae(
             for key in batch:
                 batch[key] = batch[key].to(config.device)
 
+            scheduler(current_step)
+
             with torch.no_grad():
-                features = featurizing_model(**batch).to(torch.bfloat16)
+                features = featurizing_model(**batch).to(config.dtype)
+
+                if config.normalize:
+                    features /= features.norm(dim=-1, keepdim=True)
 
             # zero the gradients
             optimizer.zero_grad()
@@ -101,22 +161,34 @@ def train_sae(
 
             # calculate the loss
             losses = sae_model.get_losses(
-                features, encoded, decoded, batch["attention_mask"]
+                features,
+                encoded,
+                decoded,
+                batch["attention_mask"],
+                current_step,
+                config,
             )
             losses["total"].backward()
 
             # update the weights
+            torch.nn.utils.clip_grad_norm_(sae_model.parameters(), 1.0)
             optimizer.step()
 
             log_progress(losses, encoded, batch["attention_mask"])
 
-            cumulative_flops += sae_model.get_flops()
+            cumulative_flops += sae_model.flops * config.batch_size * 1024
             # check if this step crossed the threshold for the most recent 1eN flops
             # or 3eN flops boundary
-            if crossed_flop_boundary(cumulative_flops, sae_model.get_flops()):
+            if crossed_flop_boundary(
+                cumulative_flops, sae_model.flops * config.batch_size * 1024
+            ):
                 # save the model with number of flops in scientific notation
                 save_model(
-                    sae_model, f"model_{current_step}_flops_{cumulative_flops:.2e}.pt"
+                    sae_model,
+                    os.path.join(
+                        wandb.run.dir,
+                        f"model_{current_step}_flops_{cumulative_flops:.2e}.pt",
+                    ),
                 )
 
                 # evaluate the model
@@ -124,6 +196,8 @@ def train_sae(
 
             current_step += 1
             progress_bar.update(1)
+            losses = {key: value.item() for key, value in losses.items()}
+            losses["flops"] = f"{cumulative_flops:.2e}"
             progress_bar.set_postfix(losses)
 
             if current_step >= config.num_steps:
