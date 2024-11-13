@@ -1,4 +1,4 @@
-from typing import Union
+from typing import Literal, Union
 
 import torch
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -14,7 +14,10 @@ class RunConfig(BaseModel):
 
     # hyperparameters
     num_steps: int = Field(description="Number of steps to train for.")
-    warmup_steps: int = Field(description="Number of warmup steps.")
+    lr_scheduler: Literal["constant", "cosine", "linear_decay"] = Field(
+        default="linear_decay", description="Learning rate scheduler."
+    )
+    lr_warmup_steps: int = Field(description="Number of warmup steps.")
     batch_size: int = Field(description="Batch size.")
     normalize: Union[bool, None] = Field(
         default=False, description="Whether to normalize the data."
@@ -25,6 +28,7 @@ class RunConfig(BaseModel):
     wd: Union[float, None] = Field(default=0.00, description="Weight decay.")
 
     # performance config
+    compile: bool = Field(default=False, description="Whether to compile the model.")
     device: str = Field(default="cpu", description="Device to train on.")
     dtype: torch.dtype = Field(default=torch.float32, description="Data type to use.")
 

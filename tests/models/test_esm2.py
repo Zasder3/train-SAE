@@ -2,7 +2,7 @@ import pytest
 import torch
 from transformers import AutoModelForMaskedLM, AutoTokenizer
 
-from train_sae.models.esm2 import TruncatedEsm2
+from train_sae.models.esm2 import trunk_and_head_from_pretrained
 
 
 @pytest.fixture
@@ -13,20 +13,19 @@ def small_esm_model():
 def test_truncated_esm_hidden_state(small_esm_model):
     # Load the full model
     full_model = AutoModelForMaskedLM.from_pretrained(small_esm_model)
-    full_model.esm.encoder.emb_layer_norm_after = None
     tokenizer = AutoTokenizer.from_pretrained(small_esm_model)
 
     # Create a truncated model with all layers
-    n_layers = len(full_model.esm.encoder.layer)
-    truncated_model = TruncatedEsm2.from_pretrained(small_esm_model, n_layers)
+    n_layers = len(full_model.esm.encoder.layer) // 2
+    truncated_model, _ = trunk_and_head_from_pretrained(small_esm_model, n_layers)
 
     # Create a small input
     inputs = tokenizer("MVQV", return_tensors="pt")
 
     # Get hidden states from both models
     with torch.no_grad():
-        full_output = full_model.esm(**inputs, output_hidden_states=True).hidden_states[
-            -1
+        full_output = full_model(**inputs, output_hidden_states=True).hidden_states[
+            n_layers
         ]
         truncated_output = truncated_model(**inputs)
 
@@ -34,3 +33,33 @@ def test_truncated_esm_hidden_state(small_esm_model):
     assert torch.allclose(
         full_output, truncated_output, atol=1e-5
     ), "Hidden states from full and truncated models are not equal"
+
+
+def test_truncated_to_head_esm(small_esm_model):
+    # Load the full model
+    full_model = AutoModelForMaskedLM.from_pretrained(small_esm_model)
+    tokenizer = AutoTokenizer.from_pretrained(small_esm_model)
+
+    # Create a truncated model with all layers
+    n_layers = len(full_model.esm.encoder.layer) // 2
+    truncated_model, head_model = trunk_and_head_from_pretrained(
+        small_esm_model, n_layers
+    )
+
+    # Create a small input
+    inputs = tokenizer("MVQV", return_tensors="pt")
+
+    # Get hidden states from both models
+    with torch.no_grad():
+        full_logits = full_model(**inputs).logits
+        truncated_output = truncated_model(**inputs)
+        truncated_logits = head_model(
+            truncated_output, attention_mask=inputs["attention_mask"]
+        )
+
+    # Check if the head model is the same as the last layer
+    assert torch.allclose(
+        truncated_logits,
+        full_logits,
+        atol=1e-5,
+    ), "Head model does not match the last layer of the full model"

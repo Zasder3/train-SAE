@@ -8,10 +8,10 @@ from transformers import AutoTokenizer, DataCollatorForLanguageModeling
 import wandb
 from train_sae.configs.base import RunConfig
 from train_sae.configs.utils import parse_config
-from train_sae.models.esm2 import TruncatedEsm2
+from train_sae.models.esm2 import trunk_and_head_from_pretrained
 from train_sae.saes.vanilla import VanillaSAE
 from train_sae.train.datasets.fasta import FastaDataset
-from train_sae.train.scheduler import cosine_lr
+from train_sae.train.scheduler import configure_scheduler
 from train_sae.train.train import train_sae
 
 
@@ -29,12 +29,21 @@ def main():
 
     # initialize the models and datasets
     logging.info("Initializing models and datasets")
-    featurizing_model = TruncatedEsm2.from_pretrained(
+    # featurizing_model = TruncatedEsm2.from_pretrained(
+    #     config.featurizing_model_name, config.n_layers, device_map=config.device
+    # )
+    featurizing_model, head_model = trunk_and_head_from_pretrained(
         config.featurizing_model_name, config.n_layers, device_map=config.device
     )
+
     sae_model = VanillaSAE(
         featurizing_model.embed_dim, config.sparse_dim, config.sparsity
     ).to(config.device)
+
+    if config.compile:
+        featurizing_model = torch.compile(featurizing_model)
+        head_model = torch.compile(head_model)
+        sae_model = torch.compile(sae_model)
     tokenizer = AutoTokenizer.from_pretrained(config.featurizing_model_name)
     optimizer = torch.optim.Adam(
         sae_model.parameters(),
@@ -42,12 +51,8 @@ def main():
         betas=(config.beta1, config.beta2),
         weight_decay=config.wd,
     )
-    if config.sparsity_warmup_steps > 0:
-        scheduler = cosine_lr(
-            optimizer, config.lr, config.warmup_steps, config.num_steps
-        )
-    else:
-        scheduler = lambda step: None  # lambda fn that does nothing
+
+    scheduler = configure_scheduler(optimizer, config)
 
     collator = DataCollatorForLanguageModeling(tokenizer, mlm=False)
     test_set_generator = np.random.default_rng(42)
@@ -64,17 +69,21 @@ def main():
         batch_size=config.batch_size,
         shuffle=True,
         collate_fn=collator,
+        pin_memory=True,
     )
     test_dataloader = DataLoader(
         test_dataset,
         batch_size=config.batch_size,
         shuffle=False,
         collate_fn=collator,
+        pin_memory=True,
     )
 
     # train the model
     train_sae(
+        tokenizer,
         featurizing_model,
+        head_model,
         sae_model,
         optimizer,
         scheduler,

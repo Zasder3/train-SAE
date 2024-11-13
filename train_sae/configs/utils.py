@@ -1,5 +1,6 @@
 import argparse
 import json
+from typing import Literal, get_args, get_origin
 
 from pydantic import BaseModel
 
@@ -10,12 +11,21 @@ def config_to_argparser(config: BaseModel) -> argparse.Namespace:
     """Convert a Pydantic config to an argparse namespace."""
     parser = argparse.ArgumentParser()
     for name, field in config.model_fields.items():
-        parser.add_argument(
-            f"--{name}",
-            type=field.annotation,
-            default=field.default,
-            help=field.description,
-        )
+        arg_name = f"--{name}"
+        arg_params = {
+            "default": field.default,
+            "help": field.description,
+        }
+
+        # Handle Literal types
+        if get_origin(field.annotation) is Literal:
+            choices = get_args(field.annotation)
+            arg_params.update({"type": type(choices[0]), "choices": choices})
+        else:
+            arg_params["type"] = field.annotation
+
+        # Add argument to parser
+        parser.add_argument(arg_name, **arg_params)
     return parser
 
 
