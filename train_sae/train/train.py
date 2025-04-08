@@ -6,17 +6,19 @@ import torch.nn as nn
 from jaxtyping import Float
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from transformers import PreTrainedTokenizer
 
 import wandb
 from train_sae.configs.base import RunConfig
+from train_sae.saes.crosscoder import CrossCoderSAE
+from train_sae.train.tasks import AbstractTask
 
 MIN_N_FLOPS_TO_SAVE = 1e15
 
 
 def log_progress(
-    losses: dict[str, torch.Tensor],
-    loss_explained: Float[torch.Tensor, "1"],
+    cross_coder_model_labels: list[tuple[str, int]],
+    losses: list[dict[str, torch.Tensor]],
+    losses_explained: list[Float[torch.Tensor, "1"]],
     encoded: Float[torch.Tensor, "b n s"],
     mask: Float[torch.Tensor, "b n"],
     neuron_is_alive: torch.Tensor,
@@ -26,17 +28,22 @@ def log_progress(
     log_dict = {}
 
     # Add losses to the log dictionary
-    for key, value in losses.items():
-        if key == "total":
-            log_dict["train/loss"] = value
-        else:
-            log_dict[f"train/loss/{key}"] = value
+    log_dict["train/loss"] = sum(loss["total"] for loss in losses)
+    for loss, (model_name, layer_idx) in zip(losses, cross_coder_model_labels):
+        for key, value in loss.items():
+            if key != "total":
+                log_dict[f"train/loss/{model_name}/layer_{layer_idx}/{key}"] = value
 
     # Add L0 norm to the log dictionary
     log_dict["train/L0_norm"] = (encoded * mask[..., None] > 0).sum() / mask.sum()
 
     # Add the LM loss explained to the log dictionary
-    log_dict["train/lm_loss_explained"] = loss_explained
+    for loss_explained, (model_name, layer_idx) in zip(
+        losses_explained, cross_coder_model_labels
+    ):
+        log_dict[f"train/lm_loss_explained/{model_name}/layer_{layer_idx}"] = (
+            loss_explained
+        )
 
     # Add the dead neurons to the log dictionary
     if neuron_is_alive is not None:
@@ -100,16 +107,19 @@ def lm_loss_explained(
 
 
 def evaluate_sae(
-    tokenizer: PreTrainedTokenizer,
-    featurizing_model: nn.Module,
-    head_model: nn.Module,
-    sae_model: nn.Module,
+    task: AbstractTask,
+    featurizing_models: list[nn.Module],
+    head_models: list[nn.Module],
+    cross_coder_model: CrossCoderSAE,
     dataloader: DataLoader,
     config: RunConfig,
 ):
     # Set the models to evaluation mode
-    sae_model.eval()
-    featurizing_model.eval()
+    for featurizing_model in featurizing_models:
+        featurizing_model.eval()
+    for head_model in head_models:
+        head_model.eval()
+    cross_coder_model.eval()
 
     # Initialize the loss accumulator
     total_loss = 0
@@ -119,7 +129,9 @@ def evaluate_sae(
     total_lm_loss_explained = 0
     total_batches = 0
     neuron_is_alive = torch.zeros(
-        sae_model.encoder.out_features, dtype=torch.bool, device=config.device
+        cross_coder_model.autoencoders[0].encoder.out_features,
+        dtype=torch.bool,
+        device=config.device,
     )
 
     # Iterate over the dataloader
@@ -129,21 +141,27 @@ def evaluate_sae(
             batch[key] = batch[key].to(config.device)
 
         with torch.inference_mode():
-            features = featurizing_model(**batch).to(config.dtype)
-            if config.normalize:
-                normalizing_factor = featurizing_model.embed_dim**0.5 / features.norm(
-                    dim=-1, keepdim=True
-                )
-                features *= normalizing_factor
-            else:
-                normalizing_factor = torch.ones_like(features)
+            features = []
+            normalizing_factors = []
+            for featurizing_model in featurizing_models:
+                current_features = featurizing_model(**batch).to(config.dtype)
+                if config.normalize:
+                    normalizing_factor = (
+                        featurizing_model.embed_dim** 0.5
+                        / current_features.norm(dim=-1, keepdim=True)
+                    )
+                    current_features *= normalizing_factor
+                else:
+                    normalizing_factor = torch.ones_like(current_features)
+                normalizing_factors.append(normalizing_factor)
+                features.append(current_features)
 
-            encoded, decoded = sae_model(features)
+            encoded, decoded = cross_coder_model(features)
             neuron_is_alive |= (
                 encoded * batch["attention_mask"].unsqueeze(-1) > 0
             ).any(dim=(0, 1))
 
-            losses = sae_model.get_losses(
+            losses = cross_coder_model.get_losses(
                 features,
                 encoded,
                 decoded,
@@ -152,20 +170,23 @@ def evaluate_sae(
                 config,
             )
 
-            total_loss += losses["total"].item()
-            total_mse_loss += losses["mse"].item()
-            total_sparsity_loss += losses["sparsity"].item()
+            total_loss += sum(loss["total"].item() for loss in losses)
+            total_mse_loss += sum(loss["mse"].item() for loss in losses)
+            total_sparsity_loss += sum(loss["sparsity"].item() for loss in losses)
             total_l0_norm += (
                 (encoded * batch["attention_mask"].unsqueeze(-1) > 0).sum().item()
             ) / batch["attention_mask"].sum().item()
-            total_lm_loss_explained += lm_loss_explained(
-                head_model,
-                features,
-                normalizing_factor,
-                decoded,
-                batch["attention_mask"],
-                head_model.input_ids_to_labels(batch["input_ids"], tokenizer),
-            ).item()
+            total_lm_loss_explained += sum(
+                lm_loss_explained(
+                    head_model,
+                    features[i],
+                    normalizing_factors[i],
+                    decoded[i],
+                    batch["attention_mask"],
+                    head_model.input_ids_to_labels(batch["input_ids"], task.tokenizer),
+                ).item()
+                for i, head_model in enumerate(head_models)
+            )
             total_batches += 1
 
     # Log the evaluation metrics
@@ -182,10 +203,11 @@ def evaluate_sae(
 
 
 def train_sae(
-    tokenizer: PreTrainedTokenizer,
-    featurizing_model: nn.Module,
-    head_model: nn.Module,
-    sae_model: nn.Module,
+    task: AbstractTask,
+    featurizing_models: list[nn.Module],
+    head_models: list[nn.Module],
+    cross_coder_model: CrossCoderSAE,
+    cross_coder_model_labels: list[tuple[str, int]],
     optimizer: torch.optim.Optimizer,
     scheduler: callable,
     train_dataloader: DataLoader,
@@ -194,51 +216,55 @@ def train_sae(
 ):
     cumulative_flops = 0
     # set the models to training mode
-    featurizing_model.eval()
-    sae_model.train()
-
-    # Convert models to dtype
-    featurizing_model = featurizing_model.to(config.dtype)
-    head_model = head_model.to(config.dtype)
-    sae_model = sae_model.to(config.dtype)
+    for featurizing_model in featurizing_models:
+        featurizing_model.eval()
+    for head_model in head_models:
+        head_model.eval()
+    cross_coder_model.train()
 
     current_step = 0
     progress_bar = tqdm(total=config.num_steps, desc="Training SAE")
 
     # Initialize neuron tracking
     neuron_is_alive = torch.zeros(
-        sae_model.encoder.out_features, dtype=torch.bool, device=config.device
+        cross_coder_model.autoencoders[0].encoder.out_features,
+        dtype=torch.bool,
+        device=config.device,
     )
     steps_since_reset = 0
     steps_per_reset = config.num_test_samples // config.batch_size
 
     while current_step < config.num_steps:
         for batch in train_dataloader:
-            del batch["labels"]
+            if "labels" in batch:
+                del batch["labels"]
             for key in batch:
                 batch[key] = batch[key].to(config.device)
 
             scheduler(current_step)
 
-            with torch.no_grad():
-                features = featurizing_model(**batch).to(config.dtype)
+            features = []
+            normalizing_factors = []
+            for featurizing_model in featurizing_models:
+                with torch.no_grad():
+                    current_features = featurizing_model(**batch).to(config.dtype)
 
-                if config.normalize:
-                    normalizing_factor = (
-                        featurizing_model.embed_dim** 0.5
-                        / features.norm(dim=-1, keepdim=True)
-                    )
-                    features *= normalizing_factor
-                else:
-                    normalizing_factor = torch.ones_like(features)
-            # zero the gradients
-            optimizer.zero_grad()
+                    if config.normalize:
+                        normalizing_factor = (
+                            featurizing_model.embed_dim** 0.5
+                            / current_features.norm(dim=-1, keepdim=True)
+                        )
+                        current_features *= normalizing_factor
+                    else:
+                        normalizing_factor = torch.ones_like(current_features)
+                    normalizing_factors.append(normalizing_factor)
+                    features.append(current_features)
 
             # forward pass
-            encoded, decoded = sae_model(features)
+            encoded, decoded = cross_coder_model(features)
 
             # calculate the loss
-            losses = sae_model.get_losses(
+            losses = cross_coder_model.get_losses(
                 features,
                 encoded,
                 decoded,
@@ -246,32 +272,39 @@ def train_sae(
                 current_step,
                 config,
             )
-            losses["total"].backward()
+            for loss in losses:
+                loss["total"].backward()
 
             # update the weights
-            torch.nn.utils.clip_grad_norm_(sae_model.parameters(), 1.0)
+            torch.nn.utils.clip_grad_norm_(cross_coder_model.parameters(), 1.0)
             optimizer.step()
+            optimizer.zero_grad()
 
             # get lm loss explained
-            loss_explained = lm_loss_explained(
-                head_model,
-                features,
-                normalizing_factor,
-                decoded,
-                batch["attention_mask"],
-                head_model.input_ids_to_labels(batch["input_ids"], tokenizer),
-            )
+            explained_losses = []
+            for i, head_model in enumerate(head_models):
+                loss_explained = lm_loss_explained(
+                    head_model,
+                    features[i],
+                    normalizing_factors[i],
+                    decoded[i],
+                    batch["attention_mask"],
+                    head_model.input_ids_to_labels(batch["input_ids"], task.tokenizer),
+                )
+                explained_losses.append(loss_explained)
 
             # Update neuron_is_alive tensor
-            neuron_is_alive |= (encoded * batch["attention_mask"][..., None] > 0).any(
-                dim=(0, 1)
-            )
+            with torch.no_grad():
+                neuron_is_alive |= (
+                    encoded * batch["attention_mask"][..., None] > 0
+                ).any(dim=(0, 1))
             # Reset and log neuron tracking if needed
             steps_since_reset += 1
             if steps_since_reset >= steps_per_reset:
                 log_progress(
+                    cross_coder_model_labels,
                     losses,
-                    loss_explained,
+                    explained_losses,
                     encoded,
                     batch["attention_mask"],
                     neuron_is_alive,
@@ -282,38 +315,44 @@ def train_sae(
                 steps_since_reset = 0
             else:
                 log_progress(
+                    cross_coder_model_labels,
                     losses,
-                    loss_explained,
+                    explained_losses,
                     encoded,
                     batch["attention_mask"],
                     None,
                     optimizer.param_groups[0]["lr"],
                 )
 
-            cumulative_flops += sae_model.flops * config.batch_size * 1024
+            cumulative_flops += (
+                cross_coder_model.flops * config.batch_size * task.max_tokens
+            )
             # check if this step crossed the threshold for the most recent 1eN flops
             # or 3eN flops boundary
             if (
                 crossed_flop_boundary(
-                    cumulative_flops, sae_model.flops * config.batch_size * 1024
+                    cumulative_flops,
+                    cross_coder_model.flops * config.batch_size * task.max_tokens,
                 )
                 or current_step == config.num_steps - 1
             ):
                 # save the model with number of flops in scientific notation
                 save_model(
-                    sae_model,
+                    cross_coder_model,
                     os.path.join(
                         wandb.run.dir,
                         f"model_{current_step}_flops_{cumulative_flops:.2e}.pt",
                     ),
                 )
+                # delete unused tensors to free up memory
+                del features, encoded, decoded
 
                 # evaluate the model
                 evaluate_sae(
-                    tokenizer,
-                    featurizing_model,
-                    head_model,
-                    sae_model,
+                    task,
+                    featurizing_models,
+                    head_models,
+                    cross_coder_model,
                     test_dataloader,
                     config,
                 )

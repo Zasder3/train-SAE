@@ -8,10 +8,12 @@ from transformers import AutoModelForMaskedLM, EsmModel
 from transformers.models.esm.modeling_esm import EsmLMHead
 from transformers.models.esm.tokenization_esm import EsmTokenizer
 
+from train_sae.models.model import AbstractHead, AbstractTrunk
+
 
 def trunk_and_head_from_pretrained(
     pretrained_model_name_or_path: str, n_layers: int, **kwargs
-) -> tuple[nn.Module, nn.Module]:
+) -> tuple[AbstractTrunk, AbstractHead]:
     """
     Create a truncated model from a pretrained ESM model.
 
@@ -28,7 +30,7 @@ def trunk_and_head_from_pretrained(
     return TruncatedEsm2(esm, n_layers), Esm2Head(esm, lm_head, n_layers)
 
 
-class TruncatedEsm2(nn.Module):
+class TruncatedEsm2(AbstractTrunk):
     """
     A modified version of ESM2 that only processes the first n layers and returns
     the intermediate representation from the residual stream.
@@ -114,7 +116,7 @@ class TruncatedEsm2(nn.Module):
         return self.embeddings.word_embeddings.embedding_dim
 
 
-class Esm2Head(nn.Module):
+class Esm2Head(AbstractHead):
     """
     The head layers of the ESM-2 model that can decode the truncated intermediate.
     """
@@ -125,6 +127,7 @@ class Esm2Head(nn.Module):
 
         Args:
             original_model (EsmModel): The original ESM model to truncate
+            lm_head (EsmLMHead): The language model head from the original model
             n_layers (int): Number of layers to keep (must be <= original model's layer count)
         """
         super().__init__()

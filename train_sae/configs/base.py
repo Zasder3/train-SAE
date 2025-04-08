@@ -3,9 +3,17 @@ from typing import Literal, Union
 import torch
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from train_sae.train.tasks import TaskFactory
+
 
 class RunConfig(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    # task config
+    task: str = Field(
+        description="The task to run for training.",
+        choices=TaskFactory.task_names,
+    )
 
     # dataset features
     dataset_dir: str = Field(description="Path to the dataset directory.")
@@ -33,8 +41,12 @@ class RunConfig(BaseModel):
     dtype: torch.dtype = Field(default=torch.float32, description="Data type to use.")
 
     # model config
-    featurizing_model_name: str = Field(description="Name of the model to train.")
-    n_layers: int = Field(description="Layer to extract features from.")
+    featurizing_model_name: Union[str, list[str]] = Field(
+        description="Name of the model(s) to train."
+    )
+    n_layers: Union[int, list[int]] = Field(
+        description="Layer(s) to extract features from."
+    )
     sparsity: float = Field(description="Sparsity loss weight.")
     sparsity_warmup_steps: Union[int, None] = Field(
         default=1, description="Sparsity warmup steps."
@@ -55,3 +67,10 @@ class RunConfig(BaseModel):
                 return getattr(torch, value.split(".")[1])
             return getattr(torch, value)
         raise ValueError(f"Value must be a string or torch.dtype, got {type(value)}")
+
+    @field_validator("featurizing_model_name", "n_layers", mode="before")
+    @classmethod
+    def parse_list(cls, value):
+        if isinstance(value, str):
+            return [value]
+        return value

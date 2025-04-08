@@ -1,5 +1,4 @@
 {
-    "task": "esm_mlm",
     "dataset_dir": "path/to/dataset",
     "num_steps": 10000,
     "batch_size": 64,
