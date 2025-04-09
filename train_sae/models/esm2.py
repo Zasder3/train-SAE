@@ -193,7 +193,7 @@ class Esm2Head(AbstractHead):
         return self.lm_head(hidden_states)
 
     def input_ids_to_labels(
-        self, input_ids: torch.Tensor, tokenizer: EsmTokenizer
+        self, input_ids: torch.Tensor, labels: torch.Tensor, tokenizer: EsmTokenizer
     ) -> torch.Tensor:
         """Convert input IDs to labels."""
         # set all special tokens to -100

@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
+from itertools import product
 
 import numpy as np
+import torch
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, DataCollatorForLanguageModeling
 
@@ -9,6 +11,9 @@ from train_sae.train.datasets.fasta import FastaDataset
 
 
 class AbstractTask(ABC):
+    tokenizer: AutoTokenizer
+    max_tokens: int
+
     @abstractmethod
     def get_dataloaders(self) -> tuple[DataLoader, DataLoader]:
         """Get the train and test dataloaders for the task.
@@ -59,7 +64,61 @@ class ESMMLMTask(AbstractTask):
 
 
 # TODO: make sure we get a working version of this
-class GrokkingTask(AbstractTask): ...
+class GrokkingTask(AbstractTask):
+    def __init__(self, config: RunConfig):
+        self.config = config
+        self.tokenizer = None
+        self.max_tokens = 4
+
+        self.prime = config.task_kwargs.get("prime", 97)
+        self.task_name = config.task_kwargs.get("task_name", "grokking")
+        assert self.task_name in ["addition", "multiplication", "division"]
+
+    def get_dataloaders(self) -> tuple[DataLoader, DataLoader]:
+        if self.task_name == "addition":
+            data = []
+            for a, b in product(range(self.prime), range(self.prime)):
+                data.append([a, 97, b, 98, (a + b) % self.prime])
+        elif self.task_name == "multiplication":
+            data = []
+            for a, b in product(range(self.prime), range(self.prime)):
+                data.append([a, 97, b, 98, (a * b) % self.prime])
+        elif self.task_name == "division":
+            data = []
+            for a, b in product(range(self.prime), range(self.prime)):
+                data.append([a, 97, b, 98, (a // b) % self.prime])
+
+        self.data = torch.tensor(data)
+
+        # split the data into train and test
+        generator = torch.Generator().manual_seed(42)
+        train_data, test_data = torch.utils.data.random_split(
+            self.data, [0.5, 0.5], generator=generator
+        )
+        self.train_dataloader = DataLoader(
+            train_data,
+            batch_size=self.config.batch_size,
+            shuffle=True,
+            pin_memory=True,
+            collate_fn=self.collator,
+        )
+        self.test_dataloader = DataLoader(
+            test_data,
+            batch_size=self.config.batch_size,
+            shuffle=False,
+            pin_memory=True,
+            collate_fn=self.collator,
+        )
+
+        return self.train_dataloader, self.test_dataloader
+
+    def collator(self, data: list[torch.Tensor]) -> dict[str, torch.Tensor]:
+        """Mirror a HuggingFace collator."""
+        return {
+            "input_ids": torch.stack([d[:-1] for d in data]),
+            "labels": torch.stack([[-100, -100, -100, d[-1]] for d in data]),
+            "attention_mask": torch.ones(len(data), self.max_tokens),
+        }
 
 
 class TaskFactory:

@@ -14,6 +14,7 @@ class RunConfig(BaseModel):
         description="The task to run for training.",
         choices=TaskFactory.task_names,
     )
+    task_kwargs: dict = Field(default={}, description="Keyword arguments for the task.")
 
     # dataset features
     dataset_dir: str = Field(description="Path to the dataset directory.")
@@ -41,8 +42,15 @@ class RunConfig(BaseModel):
     dtype: torch.dtype = Field(default=torch.float32, description="Data type to use.")
 
     # model config
+    model_type: str = Field(
+        description="Type of model to train.",
+        choices=["esm2", "transformer"],
+    )
     featurizing_model_name: Union[str, list[str]] = Field(
         description="Name of the model(s) to train."
+    )
+    featurizing_model_kwargs: dict = Field(
+        default={}, description="Keyword arguments for the featurizing model."
     )
     n_layers: Union[int, list[int]] = Field(
         description="Layer(s) to extract features from."

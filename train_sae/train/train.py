@@ -136,7 +136,6 @@ def evaluate_sae(
 
     # Iterate over the dataloader
     for batch in dataloader:
-        del batch["labels"]
         for key in batch:
             batch[key] = batch[key].to(config.device)
 
@@ -183,7 +182,11 @@ def evaluate_sae(
                     normalizing_factors[i],
                     decoded[i],
                     batch["attention_mask"],
-                    head_model.input_ids_to_labels(batch["input_ids"], task.tokenizer),
+                    head_model.input_ids_to_labels(
+                        batch["input_ids"],
+                        batch["labels"],
+                        task.tokenizer,
+                    ),
                 ).item()
                 for i, head_model in enumerate(head_models)
             )

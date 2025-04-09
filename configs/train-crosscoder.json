@@ -1,10 +1,22 @@
 {
     "dataset_dir": "path/to/dataset",
+    "task": "grokking",
+    "task_kwargs": {
+        "prime": 97
+    },
     "num_steps": 10000,
     "batch_size": 64,
     "lr": 1e-3,
-    "featurizing_model_name": "facebook/esm2_t33_650M_UR50D",
-    "n_layers": 16,
+    "featurizing_model_name": "path/to/grokking-model",
+    "n_layers": 1,
     "sparsity": 5.0,
-    "sparse_dim": 4096
+    "sparse_dim": 2048,
+    "model_type": "transformer",
+    "featurizing_model_kwargs": {
+        "vocab_size": 99,
+        "d_model": 128,
+        "d_ff": 512,
+        "n_heads": 4,
+        "use_geglu": false
+    }
 }

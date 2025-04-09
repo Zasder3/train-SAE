@@ -6,7 +6,7 @@ import torch
 import wandb
 from train_sae.configs.base import RunConfig
 from train_sae.configs.utils import parse_config
-from train_sae.models.esm2 import trunk_and_head_from_pretrained
+from train_sae.models.model import trunk_and_head_factory
 from train_sae.saes.crosscoder import CrossCoderSAE
 from train_sae.train.scheduler import configure_scheduler
 from train_sae.train.tasks import TaskFactory
@@ -37,11 +37,10 @@ def main():
     for featurizing_model_name, n_layers in product(
         config.featurizing_model_name, config.n_layers
     ):
-        featurizing_model, head_model = trunk_and_head_from_pretrained(
+        featurizing_model, head_model = trunk_and_head_factory(
+            config,
             featurizing_model_name,
             n_layers,
-            device_map=config.device,
-            torch_dtype=config.dtype,
         )
         featurizing_models.append(featurizing_model)
         head_models.append(head_model)
@@ -71,7 +70,6 @@ def main():
 
     scheduler = configure_scheduler(optimizer, config)
 
-    # TODO: create factories for this
     task = TaskFactory.from_config(config)
     train_dataloader, test_dataloader = task.get_dataloaders()
 

@@ -4,6 +4,8 @@ from typing import Any, Optional
 import torch
 from torch import nn
 
+from train_sae.configs.base import RunConfig
+
 
 class AbstractTrunk(ABC, nn.Module):
     """
@@ -64,13 +66,15 @@ class AbstractHead(ABC, nn.Module):
 
 
 def trunk_and_head_factory(
-    model_type: str, pretrained_model_name_or_path: str, n_layers: int, **kwargs
+    config: RunConfig,
+    pretrained_model_name_or_path: str,
+    n_layers: int,
 ) -> tuple[AbstractTrunk, AbstractHead]:
     """
     Factory function to create trunk and head models based on model type.
 
     Args:
-        model_type: Type of model (e.g., "esm2")
+        config: RunConfig
         pretrained_model_name_or_path: Name or path of pretrained model
         n_layers: Number of layers for trunk
         **kwargs: Additional arguments to pass to model initialization
@@ -78,11 +82,24 @@ def trunk_and_head_factory(
     Returns:
         A tuple of (trunk, head) models
     """
-    if model_type == "esm2":
+    if config.model_type == "esm2":
         from train_sae.models.esm2 import trunk_and_head_from_pretrained
 
         return trunk_and_head_from_pretrained(
-            pretrained_model_name_or_path, n_layers, **kwargs
+            pretrained_model_name_or_path,
+            n_layers,
+            device_map=config.device,
+            torch_dtype=config.dtype,
+        )
+    elif config.model_type == "transformer":
+        from train_sae.models.transformer import trunk_and_head_from_pretrained
+
+        return trunk_and_head_from_pretrained(
+            pretrained_model_name_or_path,
+            n_layers,
+            config.device,
+            config.dtype,
+            **config.featurizing_model_kwargs,
         )
     else:
-        raise ValueError(f"Unsupported model type: {model_type}")
+        raise ValueError(f"Unsupported model type: {config.model_type}")
