@@ -82,7 +82,7 @@ def trunk_and_head_factory(
     Returns:
         A tuple of (trunk, head) models
     """
-    if config.model_type == "esm2":
+    if config.featurizing_model_type == "esm2":
         from train_sae.models.esm2 import trunk_and_head_from_pretrained
 
         return trunk_and_head_from_pretrained(
@@ -91,7 +91,7 @@ def trunk_and_head_factory(
             device_map=config.device,
             torch_dtype=config.dtype,
         )
-    elif config.model_type == "transformer":
+    elif config.featurizing_model_type == "transformer":
         from train_sae.models.transformer import trunk_and_head_from_pretrained
 
         return trunk_and_head_from_pretrained(
@@ -102,4 +102,4 @@ def trunk_and_head_factory(
             **config.featurizing_model_kwargs,
         )
     else:
-        raise ValueError(f"Unsupported model type: {config.model_type}")
+        raise ValueError(f"Unsupported model type: {config.featurizing_model_type}")

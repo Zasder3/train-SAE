@@ -6,7 +6,6 @@ import torch
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, DataCollatorForLanguageModeling
 
-from train_sae.configs.base import RunConfig
 from train_sae.train.datasets.fasta import FastaDataset
 
 
@@ -25,7 +24,7 @@ class AbstractTask(ABC):
 
 
 class ESMMLMTask(AbstractTask):
-    def __init__(self, config: RunConfig):
+    def __init__(self, config):
         self.config = config
         self.tokenizer = AutoTokenizer.from_pretrained(config.featurizing_model_name)
         self.max_tokens = 1024
@@ -34,7 +33,7 @@ class ESMMLMTask(AbstractTask):
         """Get the train and test dataloaders for the ESM MLM task."""
         collator = DataCollatorForLanguageModeling(self.tokenizer, mlm=False)
         test_set_generator = np.random.default_rng(42)
-        all_indices = np.arange(self.config.samples_in_dataset)
+        all_indices = np.arange(self.config.task_kwargs.samples_in_dataset)
         test_set_generator.shuffle(all_indices)
         train_dataset = FastaDataset(
             self.config.dataset_dir,
@@ -65,7 +64,7 @@ class ESMMLMTask(AbstractTask):
 
 # TODO: make sure we get a working version of this
 class GrokkingTask(AbstractTask):
-    def __init__(self, config: RunConfig):
+    def __init__(self, config):
         self.config = config
         self.tokenizer = None
         self.max_tokens = 4
@@ -91,10 +90,13 @@ class GrokkingTask(AbstractTask):
         self.data = torch.tensor(data)
 
         # split the data into train and test
-        generator = torch.Generator().manual_seed(42)
-        train_data, test_data = torch.utils.data.random_split(
-            self.data, [0.5, 0.5], generator=generator
-        )
+        # generator = torch.Generator().manual_seed(42)
+        # train_data, test_data = torch.utils.data.random_split(
+        #     self.data, [0.5, 0.5], generator=generator
+        # )
+        train_data = self.data
+        test_data = self.data
+
         self.train_dataloader = DataLoader(
             train_data,
             batch_size=self.config.batch_size,
@@ -116,14 +118,16 @@ class GrokkingTask(AbstractTask):
         """Mirror a HuggingFace collator."""
         return {
             "input_ids": torch.stack([d[:-1] for d in data]),
-            "labels": torch.stack([[-100, -100, -100, d[-1]] for d in data]),
+            "labels": torch.stack(
+                [torch.tensor([-100, -100, -100, d[-1]]) for d in data]
+            ),
             "attention_mask": torch.ones(len(data), self.max_tokens),
         }
 
 
 class TaskFactory:
     @staticmethod
-    def get_task(config: RunConfig) -> AbstractTask:
+    def get_task(config) -> AbstractTask:
         if config.task == "esm_mlm":
             return ESMMLMTask(config)
         elif config.task == "grokking":

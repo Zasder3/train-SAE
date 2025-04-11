@@ -1,3 +1,5 @@
+from abc import ABC, abstractmethod
+
 import torch
 from jaxtyping import Bool, Float
 from torch import nn
@@ -5,9 +7,44 @@ from torch import nn
 from train_sae.configs.base import RunConfig
 
 
-class VanillaSAE(nn.Module):
-    def __init__(self, embed_dim: int, sparse_dim: int, sparsity: float = 5.0):
+class AbstractSAE(nn.Module, ABC):
+    def __init__(self, embed_dim: int, sparse_dim: int):
         super().__init__()
+        self.embed_dim = embed_dim
+        self.sparse_dim = sparse_dim
+
+    @abstractmethod
+    def encode(self, x: Float[torch.Tensor, "b n d"]) -> Float[torch.Tensor, "b n s"]:
+        pass
+
+    def forward(
+        self, x: Float[torch.Tensor, "b n d"]
+    ) -> tuple[Float[torch.Tensor, "b n s"], Float[torch.Tensor, "b n d"]]:
+        encoded = self.encode(x)
+        decoded = self.decoder(encoded)
+        return encoded, decoded
+
+    @abstractmethod
+    def get_losses(
+        self,
+        x: Float[torch.Tensor, "b n d"],
+        encoded: Float[torch.Tensor, "b n s"],
+        decoded: Float[torch.Tensor, "b n d"],
+        mask: Bool[torch.Tensor, "b n"],
+        step: int,
+        config: RunConfig,
+    ) -> dict[str, Float[torch.Tensor, "1"]]:
+        pass
+
+    @property
+    @abstractmethod
+    def flops(self) -> int:
+        pass
+
+
+class VanillaSAE(AbstractSAE):
+    def __init__(self, embed_dim: int, sparse_dim: int, sparsity: float = 5.0):
+        super().__init__(embed_dim, sparse_dim)
         self.encoder = nn.Linear(embed_dim, sparse_dim)
         self.decoder = nn.Linear(sparse_dim, embed_dim)
         self.encoder.weight.data /= (
@@ -21,13 +58,6 @@ class VanillaSAE(nn.Module):
 
     def encode(self, x: Float[torch.Tensor, "b n d"]) -> Float[torch.Tensor, "b n s"]:
         return torch.relu(self.encoder(x))
-
-    def forward(
-        self, x: Float[torch.Tensor, "b n d"]
-    ) -> tuple[Float[torch.Tensor, "b n d"], Float[torch.Tensor, "b n s"]]:
-        encoded = self.encode(x)
-        decoded = self.decoder(encoded)
-        return encoded, decoded
 
     def get_losses(
         self,

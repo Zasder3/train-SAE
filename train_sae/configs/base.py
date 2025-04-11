@@ -18,9 +18,7 @@ class RunConfig(BaseModel):
 
     # dataset features
     dataset_dir: str = Field(description="Path to the dataset directory.")
-    samples_in_dataset: int = Field(description="Number of samples in the dataset.")
     num_test_samples: int = Field(description="Number of samples to use for testing.")
-
     # hyperparameters
     num_steps: int = Field(description="Number of steps to train for.")
     lr_scheduler: Literal["constant", "cosine", "linear_decay"] = Field(
@@ -42,7 +40,7 @@ class RunConfig(BaseModel):
     dtype: torch.dtype = Field(default=torch.float32, description="Data type to use.")
 
     # model config
-    model_type: str = Field(
+    featurizing_model_type: str = Field(
         description="Type of model to train.",
         choices=["esm2", "transformer"],
     )
@@ -55,11 +53,14 @@ class RunConfig(BaseModel):
     n_layers: Union[int, list[int]] = Field(
         description="Layer(s) to extract features from."
     )
-    sparsity: float = Field(description="Sparsity loss weight.")
-    sparsity_warmup_steps: Union[int, None] = Field(
-        default=1, description="Sparsity warmup steps."
-    )
+
+    # sae config
+    sparsity_warmup_steps: int = Field(default=1, description="Sparsity warmup steps.")
     sparse_dim: int = Field(description="Sparse dimension.")
+    sae_type: Literal["vanilla", "topk"] = Field(
+        default="vanilla", description="Type of SAE to train."
+    )
+    sae_kwargs: dict = Field(default={}, description="Keyword arguments for the SAE.")
 
     # wandb config
     run_name: Union[str, None] = Field(default=None, description="Name of the run.")
@@ -79,6 +80,6 @@ class RunConfig(BaseModel):
     @field_validator("featurizing_model_name", "n_layers", mode="before")
     @classmethod
     def parse_list(cls, value):
-        if isinstance(value, str):
+        if not isinstance(value, list):
             return [value]
         return value

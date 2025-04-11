@@ -11,7 +11,7 @@
     "n_layers": 1,
     "sparsity": 5.0,
     "sparse_dim": 2048,
-    "model_type": "transformer",
+    "featurizing_model_type": "transformer",
     "featurizing_model_kwargs": {
         "vocab_size": 99,
         "d_model": 128,

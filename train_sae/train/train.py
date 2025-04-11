@@ -239,8 +239,6 @@ def train_sae(
 
     while current_step < config.num_steps:
         for batch in train_dataloader:
-            if "labels" in batch:
-                del batch["labels"]
             for key in batch:
                 batch[key] = batch[key].to(config.device)
 
@@ -275,8 +273,8 @@ def train_sae(
                 current_step,
                 config,
             )
-            for loss in losses:
-                loss["total"].backward()
+            total_loss = sum(loss["total"] for loss in losses)
+            total_loss.backward()
 
             # update the weights
             torch.nn.utils.clip_grad_norm_(cross_coder_model.parameters(), 1.0)
@@ -292,7 +290,11 @@ def train_sae(
                     normalizing_factors[i],
                     decoded[i],
                     batch["attention_mask"],
-                    head_model.input_ids_to_labels(batch["input_ids"], task.tokenizer),
+                    head_model.input_ids_to_labels(
+                        batch["input_ids"],
+                        batch["labels"],
+                        task.tokenizer,
+                    ),
                 )
                 explained_losses.append(loss_explained)
 
@@ -362,9 +364,10 @@ def train_sae(
 
             current_step += 1
             progress_bar.update(1)
-            losses = {key: value.item() for key, value in losses.items()}
-            losses["flops"] = f"{cumulative_flops:.2e}"
-            progress_bar.set_postfix(losses)
+            info = {}
+            info["flops"] = f"{cumulative_flops:.2e}"
+            info["loss"] = total_loss.item()
+            progress_bar.set_postfix(info)
 
             if current_step >= config.num_steps:
                 break

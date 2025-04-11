@@ -51,7 +51,8 @@ def main():
         len(featurizing_models),
         featurizing_model.embed_dim,
         config.sparse_dim,
-        config.sparsity,
+        config.sae_type,
+        config.sae_kwargs,
     ).to(config.device, config.dtype)
 
     if config.compile:
@@ -70,8 +71,13 @@ def main():
 
     scheduler = configure_scheduler(optimizer, config)
 
-    task = TaskFactory.from_config(config)
+    task = TaskFactory.get_task(config)
     train_dataloader, test_dataloader = task.get_dataloaders()
+
+    # clean featurizing model name for logging
+    config.featurizing_model_name = [
+        name.split("/")[-1].split(".")[0] for name in config.featurizing_model_name
+    ]
 
     # train the model
     train_sae(

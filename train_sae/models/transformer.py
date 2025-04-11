@@ -1,3 +1,4 @@
+import os
 from typing import Any, Optional
 
 import numpy as np
@@ -164,8 +165,8 @@ class TruncatedTransformer(AbstractTrunk):
             [original_transformer.blocks[i] for i in range(n_layers)]
         )
 
-    def forward(self, x: torch.tensor) -> torch.tensor:
-        x = self.embeddings(x)
+    def forward(self, input_ids: torch.tensor, **kwargs) -> torch.tensor:
+        x = self.embeddings(input_ids)
         for block in self.blocks:
             x = block(x)
         return x
@@ -187,7 +188,7 @@ class TransformerHead(AbstractHead):
         self.norm = original_transformer.norm
         self.w_proj = original_transformer.w_proj
 
-    def forward(self, x: torch.tensor) -> torch.tensor:
+    def forward(self, x: torch.tensor, **kwargs) -> torch.tensor:
         for block in self.blocks:
             x = block(x)
         x = self.norm(x)
@@ -209,14 +210,26 @@ def trunk_and_head_from_pretrained(
     d_model: int,
     d_ff: int,
     n_heads: int,
+    n_model_layers: int,
     use_geglu: bool,
     kv_heads: Optional[int] = None,
 ) -> tuple[AbstractTrunk, AbstractHead]:
     original_transformer = Transformer(
-        vocab_size, d_model, d_ff, n_heads, n_layers, use_geglu, kv_heads
+        vocab_size, d_model, d_ff, n_heads, n_model_layers, use_geglu, kv_heads
     )
-    state_dict = torch.load(pretrained_model_name_or_path)
-    original_transformer.load_state_dict(state_dict)
+    state_dict = torch.load(
+        os.path.expanduser(pretrained_model_name_or_path), map_location=device
+    )
+
+    # Remove "_orig_mod." prefix from keys if present
+    fixed_state_dict = {}
+    for key, value in state_dict.items():
+        if key.startswith("_orig_mod."):
+            fixed_state_dict[key[10:]] = value  # 10 is the length of "_orig_mod."
+        else:
+            fixed_state_dict[key] = value
+
+    original_transformer.load_state_dict(fixed_state_dict)
     trunk = TruncatedTransformer(original_transformer, n_layers)
     head = TransformerHead(original_transformer, n_layers)
     trunk.to(device, dtype)
