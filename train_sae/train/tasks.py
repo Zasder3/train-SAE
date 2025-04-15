@@ -62,7 +62,6 @@ class ESMMLMTask(AbstractTask):
         return train_dataloader, test_dataloader
 
 
-# TODO: make sure we get a working version of this
 class GrokkingTask(AbstractTask):
     def __init__(self, config):
         self.config = config
@@ -84,7 +83,7 @@ class GrokkingTask(AbstractTask):
                 data.append([a, 97, b, 98, (a * b) % self.prime])
         elif self.task_name == "division":
             data = []
-            for a, b in product(range(self.prime), range(self.prime)):
+            for a, b in product(range(self.prime), range(1, self.prime)):
                 data.append([a, 97, b, 98, (a // b) % self.prime])
 
         self.data = torch.tensor(data)

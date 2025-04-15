@@ -32,11 +32,12 @@ class CrossCoderSAE(nn.Module):
                 for _ in range(n_autoencoders)
             ]
         )
+        self.activation_fn = self.autoencoders[0].activation_fn
 
     def encode(
         self, x: list[Float[torch.Tensor, "b n d"]]
     ) -> Float[torch.Tensor, "b n s"]:
-        return torch.relu(
+        return self.activation_fn(
             torch.sum(
                 torch.stack(
                     [

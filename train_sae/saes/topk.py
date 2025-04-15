@@ -6,11 +6,18 @@ from train_sae.saes.vanilla import VanillaSAE
 
 
 class TopKSAE(VanillaSAE):
-    def __init__(self, embed_dim: int, sparse_dim: int, topk: float = 0.1):
+    def __init__(
+        self,
+        embed_dim: int,
+        sparse_dim: int,
+        topk: int,
+    ):
         super().__init__(embed_dim, sparse_dim)
         self.topk = topk
 
-    def encode(self, x: Float[torch.Tensor, "b n d"]) -> Float[torch.Tensor, "b n s"]:
+    def activation_fn(
+        self, x: Float[torch.Tensor, "b n s"]
+    ) -> Float[torch.Tensor, "b n s"]:
         topk_values, topk_indices = torch.topk(x, self.topk, dim=-1)
         return_values = torch.zeros_like(x)
         return_values.scatter_(dim=-1, index=topk_indices, src=topk_values)

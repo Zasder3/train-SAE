@@ -42,7 +42,10 @@ def log_progress(
         losses_explained, cross_coder_model_labels
     ):
         log_dict[f"train/lm_loss_explained/{model_name}/layer_{layer_idx}"] = (
-            loss_explained
+            loss_explained[0]
+        )
+        log_dict[f"train/delta_lm_loss/{model_name}/layer_{layer_idx}"] = (
+            loss_explained[1]
         )
 
     # Add the dead neurons to the log dictionary
@@ -83,7 +86,7 @@ def lm_loss_explained(
     decoded: Float[torch.Tensor, "b n d"],
     mask: Float[torch.Tensor, "b n"],
     labels: Float[torch.Tensor, "b n"],
-) -> Float[torch.Tensor, "1"]:
+) -> tuple[Float[torch.Tensor, "1"], Float[torch.Tensor, "1"]]:
     real_logits = head_model(features / normalizing_factor, attention_mask=mask)
     reconstructed_logits = head_model(decoded / normalizing_factor, attention_mask=mask)
 
@@ -103,7 +106,9 @@ def lm_loss_explained(
         ignore_index=-100,
     )
 
-    return 1 - (reconstructed_loss - real_loss) / (null_loss - real_loss)
+    return 1 - (reconstructed_loss - real_loss) / (
+        null_loss - real_loss
+    ), reconstructed_loss - real_loss
 
 
 def evaluate_sae(
@@ -192,17 +197,20 @@ def evaluate_sae(
             )
             total_batches += 1
 
+    log_dict = {
+        "eval/loss": total_loss / total_batches,
+        "eval/L0_norm": total_l0_norm / total_batches,
+        "eval/lm_loss_explained": total_lm_loss_explained[0] / total_batches,
+        "eval/delta_lm_loss": total_lm_loss_explained[1] / total_batches,
+        "eval/dead_neurons": 1 - neuron_is_alive.float().mean(),
+    }
+    # Add losses to the log dictionary
+    for key in losses:
+        if key != "total":
+            log_dict[f"eval/loss/{key}"] = losses[key] / total_batches
+
     # Log the evaluation metrics
-    wandb.log(
-        {
-            "eval/loss": total_loss / total_batches,
-            "eval/loss/mse": total_mse_loss / total_batches,
-            "eval/loss/sparsity": total_sparsity_loss / total_batches,
-            "eval/L0_norm": total_l0_norm / total_batches,
-            "eval/lm_loss_explained": total_lm_loss_explained / total_batches,
-            "eval/dead_neurons": 1 - neuron_is_alive.float().mean(),
-        }
-    )
+    wandb.log(log_dict)
 
 
 def train_sae(
@@ -334,12 +342,9 @@ def train_sae(
             )
             # check if this step crossed the threshold for the most recent 1eN flops
             # or 3eN flops boundary
-            if (
-                crossed_flop_boundary(
-                    cumulative_flops,
-                    cross_coder_model.flops * config.batch_size * task.max_tokens,
-                )
-                or current_step == config.num_steps - 1
+            if crossed_flop_boundary(
+                cumulative_flops,
+                cross_coder_model.flops * config.batch_size * task.max_tokens,
             ):
                 # save the model with number of flops in scientific notation
                 save_model(
@@ -371,5 +376,24 @@ def train_sae(
 
             if current_step >= config.num_steps:
                 break
+
+    # Ensure model is saved at the end of training
+    save_model(
+        cross_coder_model,
+        os.path.join(
+            wandb.run.dir,
+            f"model_{current_step}_flops_{cumulative_flops:.2e}.pt",
+        ),
+    )
+
+    # Final evaluation
+    evaluate_sae(
+        task,
+        featurizing_models,
+        head_models,
+        cross_coder_model,
+        test_dataloader,
+        config,
+    )
 
     progress_bar.close()

@@ -11,14 +11,20 @@ from train_sae.models.model import AbstractHead, AbstractTrunk
 
 
 class TransformerMLP(nn.Module):
-    def __init__(self, d_model: int, d_ff: int, use_geglu: bool):
+    def __init__(
+        self,
+        d_model: int,
+        d_ff: int,
+        use_geglu: bool,
+        norm_layer: nn.Module = nn.RMSNorm,
+    ):
         super().__init__()
         self.use_geglu = use_geglu
         self.w_up = nn.Linear(d_model, d_ff)
         self.w_down = nn.Linear(d_ff, d_model)
         if self.use_geglu:
             self.w_g = nn.Linear(d_model, d_ff)
-        self.norm = nn.RMSNorm(d_model)
+        self.norm = norm_layer(d_model)
 
     def forward(self, x: torch.tensor) -> torch.tensor:
         x_norm = self.norm(x)
@@ -31,7 +37,14 @@ class TransformerMLP(nn.Module):
 
 
 class TransformerAttention(nn.Module):
-    def __init__(self, d_model: int, n_heads: int, kv_heads: Optional[int] = None):
+    def __init__(
+        self,
+        d_model: int,
+        n_heads: int,
+        kv_heads: Optional[int] = None,
+        use_learned_pos_emb: bool = False,
+        norm_layer: nn.Module = nn.RMSNorm,
+    ):
         super().__init__()
         self.d_head = d_model // n_heads
         self.n_heads = n_heads
@@ -40,18 +53,22 @@ class TransformerAttention(nn.Module):
         self.w_k = nn.Linear(d_model, self.d_head * self.kv_heads, bias=False)
         self.w_v = nn.Linear(d_model, self.d_head * self.kv_heads, bias=False)
         self.w_o = nn.Linear(d_model, d_model, bias=False)
-        self.norm = nn.RMSNorm(d_model)
+        self.norm = norm_layer(d_model)
         self.register_buffer(
             "scale", torch.tensor(np.sqrt(self.d_head), dtype=torch.float32)
         )
 
-        theta = torch.pow(10000, -2 * (torch.arange(0, self.d_head) // 2) / self.d_head)
-        max_seq_len = 8096
-        cos = torch.outer(torch.arange(max_seq_len), theta)
-        sin = torch.outer(torch.arange(max_seq_len), theta)
-        self.register_buffer("cos", torch.cos(cos))
-        self.register_buffer("sin", torch.sin(sin))
-        self.sin[0::2] = -self.sin[0::2]
+        self.use_learned_pos_emb = use_learned_pos_emb
+        if not self.use_learned_pos_emb:
+            theta = torch.pow(
+                10000, -2 * (torch.arange(0, self.d_head) // 2) / self.d_head
+            )
+            max_seq_len = 8096
+            cos = torch.outer(torch.arange(max_seq_len), theta)
+            sin = torch.outer(torch.arange(max_seq_len), theta)
+            self.register_buffer("cos", torch.cos(cos))
+            self.register_buffer("sin", torch.sin(sin))
+            self.sin[0::2] = -self.sin[0::2]
 
     def forward(
         self,
@@ -69,10 +86,11 @@ class TransformerAttention(nn.Module):
         v = rearrange(v, "b n (k a) -> b k n a", k=self.kv_heads)
 
         # rotary embedding
-        cos = self.cos[:n]
-        sin = self.sin[:n]
-        q = q * cos + q * sin
-        k = k * cos + k * sin
+        if not self.use_learned_pos_emb:
+            cos = self.cos[:n]
+            sin = self.sin[:n]
+            q = q * cos + q * sin
+            k = k * cos + k * sin
 
         # matmulling
         reps = self.n_heads // self.kv_heads
@@ -100,10 +118,18 @@ class TransformerBlock(nn.Module):
         use_geglu: bool,
         n_heads: int,
         kv_heads: Optional[int] = None,
+        use_learned_pos_emb: bool = False,
+        norm_layer: nn.Module = nn.RMSNorm,
     ):
         super().__init__()
-        self.attention = TransformerAttention(d_model, n_heads, kv_heads)
-        self.mlp = TransformerMLP(d_model, d_ff, use_geglu)
+        self.attention = TransformerAttention(
+            d_model,
+            n_heads,
+            kv_heads,
+            use_learned_pos_emb,
+            norm_layer,
+        )
+        self.mlp = TransformerMLP(d_model, d_ff, use_geglu, norm_layer)
 
     def forward(
         self,
@@ -125,8 +151,12 @@ class Transformer(nn.Module):
         n_layers: int,
         use_geglu: bool = True,
         kv_heads: Optional[int] = None,
+        use_learned_pos_emb: bool = False,
+        max_seq_len: int = 8096,
+        norm_layer: str = "RMSNorm",
     ):
         super().__init__()
+        norm_layer = getattr(nn, norm_layer)
         self.d_model = d_model
         self.d_ff = d_ff
         self.n_heads = n_heads
@@ -134,14 +164,24 @@ class Transformer(nn.Module):
         self.use_geglu = use_geglu
         self.kv_heads = n_heads if kv_heads is None else kv_heads
         self.embedding = nn.Embedding(vocab_size, d_model)
+        if use_learned_pos_emb:
+            self.pos_embedding = nn.Parameter(torch.zeros(1, max_seq_len, d_model))
         self.blocks = nn.ModuleList(
             [
-                TransformerBlock(d_model, d_ff, use_geglu, n_heads, kv_heads)
+                TransformerBlock(
+                    d_model,
+                    d_ff,
+                    use_geglu,
+                    n_heads,
+                    kv_heads,
+                    use_learned_pos_emb,
+                    norm_layer,
+                )
                 for _ in range(n_layers)
             ]
         )
 
-        self.norm = nn.RMSNorm(d_model)
+        self.norm = norm_layer(d_model)
         self.w_proj = nn.Linear(d_model, vocab_size, bias=False)
 
     def forward(
@@ -150,6 +190,11 @@ class Transformer(nn.Module):
         attention_mask: Optional[torch.tensor] = None,
     ) -> torch.tensor:
         x = self.embedding(x)
+
+        seq_len = x.shape[1]
+        if hasattr(self, "pos_embedding"):
+            x = x + self.pos_embedding[:, :seq_len, :]
+
         for block in self.blocks:
             x = block(x, attention_mask)
         x = self.norm(x)
@@ -161,12 +206,19 @@ class TruncatedTransformer(AbstractTrunk):
     def __init__(self, original_transformer: Transformer, n_layers: int):
         super().__init__()
         self.embeddings = original_transformer.embedding
+        if hasattr(original_transformer, "pos_embedding"):
+            self.pos_embedding = original_transformer.pos_embedding
         self.blocks = nn.ModuleList(
             [original_transformer.blocks[i] for i in range(n_layers)]
         )
 
     def forward(self, input_ids: torch.tensor, **kwargs) -> torch.tensor:
         x = self.embeddings(input_ids)
+
+        seq_len = x.shape[1]
+        if hasattr(self, "pos_embedding"):
+            x = x + self.pos_embedding[:, :seq_len, :]
+
         for block in self.blocks:
             x = block(x)
         return x
@@ -213,9 +265,21 @@ def trunk_and_head_from_pretrained(
     n_model_layers: int,
     use_geglu: bool,
     kv_heads: Optional[int] = None,
+    use_learned_pos_emb: bool = False,
+    max_seq_len: int = 8096,
+    norm_layer: str = "RMSNorm",
 ) -> tuple[AbstractTrunk, AbstractHead]:
     original_transformer = Transformer(
-        vocab_size, d_model, d_ff, n_heads, n_model_layers, use_geglu, kv_heads
+        vocab_size,
+        d_model,
+        d_ff,
+        n_heads,
+        n_model_layers,
+        use_geglu,
+        kv_heads,
+        use_learned_pos_emb,
+        max_seq_len,
+        norm_layer,
     )
     state_dict = torch.load(
         os.path.expanduser(pretrained_model_name_or_path), map_location=device

@@ -17,10 +17,16 @@ class AbstractSAE(nn.Module, ABC):
     def encode(self, x: Float[torch.Tensor, "b n d"]) -> Float[torch.Tensor, "b n s"]:
         pass
 
+    @abstractmethod
+    def activation_fn(
+        self, x: Float[torch.Tensor, "b n s"]
+    ) -> Float[torch.Tensor, "b n s"]:
+        pass
+
     def forward(
         self, x: Float[torch.Tensor, "b n d"]
     ) -> tuple[Float[torch.Tensor, "b n s"], Float[torch.Tensor, "b n d"]]:
-        encoded = self.encode(x)
+        encoded = self.activation_fn(self.encode(x))
         decoded = self.decoder(encoded)
         return encoded, decoded
 
@@ -56,8 +62,13 @@ class VanillaSAE(AbstractSAE):
         self.decoder.bias.data.zero_()
         self.sparsity = sparsity
 
+    def activation_fn(
+        self, x: Float[torch.Tensor, "b n s"]
+    ) -> Float[torch.Tensor, "b n s"]:
+        return torch.relu(x)
+
     def encode(self, x: Float[torch.Tensor, "b n d"]) -> Float[torch.Tensor, "b n s"]:
-        return torch.relu(self.encoder(x))
+        return self.encoder(x)
 
     def get_losses(
         self,
