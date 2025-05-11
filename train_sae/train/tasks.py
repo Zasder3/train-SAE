@@ -70,13 +70,23 @@ class GrokkingTask(AbstractTask):
 
         self.prime = config.task_kwargs.get("prime", 97)
         self.task_name = config.task_kwargs.get("task_name", "grokking")
-        assert self.task_name in ["addition", "multiplication", "division"]
+        assert self.task_name in [
+            "addition",
+            "subtraction",
+            "multiplication",
+            "division",
+            "conditional",
+        ]
 
     def get_dataloaders(self) -> tuple[DataLoader, DataLoader]:
         if self.task_name == "addition":
             data = []
             for a, b in product(range(self.prime), range(self.prime)):
                 data.append([a, 97, b, 98, (a + b) % self.prime])
+        elif self.task_name == "subtraction":
+            data = []
+            for a, b in product(range(self.prime), range(self.prime)):
+                data.append([a, 97, b, 98, (a - b) % self.prime])
         elif self.task_name == "multiplication":
             data = []
             for a, b in product(range(self.prime), range(self.prime)):
@@ -84,7 +94,18 @@ class GrokkingTask(AbstractTask):
         elif self.task_name == "division":
             data = []
             for a, b in product(range(self.prime), range(1, self.prime)):
-                data.append([a, 97, b, 98, (a // b) % self.prime])
+                data.append([a, 97, b, 98, (a * pow(b, -1, self.prime)) % self.prime])
+        elif self.task_name == "conditional":
+
+            def _conditional_fn(a, b):
+                if b % 2 == 1:
+                    return a * pow(b, -1, self.prime)
+                else:
+                    return a - b
+
+            data = []
+            for a, b in product(range(self.prime), range(self.prime)):
+                data.append([a, 97, b, 98, _conditional_fn(a, b) % self.prime])
 
         self.data = torch.tensor(data)
 
